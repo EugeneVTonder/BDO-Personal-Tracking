@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drop Tracker</title>
+<style>
+:root{--bg:#10171a;--card:#18232a;--line:#2a3a43;--tx:#e6ece8;--mut:#8a9ba3;--ac:#d9a441;--ok:#5cc59a;--bad:#e5645f;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--tx)}
+h1,h2{font-family:Georgia,"Times New Roman",serif;font-weight:600;margin:0}
+h2{font-size:19px;margin-bottom:10px}
+header{display:flex;align-items:center;gap:20px;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5;flex-wrap:wrap}
+h1{font-size:22px;color:var(--ac)}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:0;color:var(--mut);padding:8px 14px;font:inherit;cursor:pointer;border-bottom:2px solid transparent;border-radius:0}
+nav button.on{color:var(--tx);border-color:var(--ac)}
+main{max-width:980px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.between{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.mut{color:var(--mut);font-size:13px}
+.grow{flex:1;min-width:0}
+input,select,button{font:inherit;color:var(--tx);background:#0f171b;border:1px solid var(--line);border-radius:6px;padding:7px 10px}
+input[type=number]{width:90px}
+input[type=checkbox]{width:auto}
+input.sm{width:64px;text-align:center}
+button{cursor:pointer}
+button:hover{border-color:var(--mut)}
+button.pri{background:var(--ac);border-color:var(--ac);color:#1a1405;font-weight:600}
+button.bad{color:var(--bad)}
+:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.tile{border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center;background:#0f171b}
+.tile input{width:100%;margin-top:6px;text-align:center}
+.ico{font-size:28px;line-height:1.1}
+.ico img{width:30px;height:30px;object-fit:contain;vertical-align:middle}
+.timer{font:600 24px Georgia,serif;color:var(--ac)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:500}
+.table-wrap{overflow-x:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+.stat b{display:block;font:600 22px Georgia,serif}
+.stat.key b{color:var(--ac);font-size:28px}
+.srow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.srow .ico{width:36px;text-align:center}
+.ylog{font-size:14px;padding:6px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}
+.chip{display:inline-flex;gap:4px;align-items:center;border:1px solid var(--line);border-radius:14px;padding:1px 2px 1px 10px;margin:2px;font-size:13px}
+.chip button{border:0;background:none;padding:2px 7px;color:var(--bad)}
+.pos{color:var(--ok)}.neg{color:var(--bad)}
+</style>
+</head>
+<body>
+<header><h1>Drop Tracker</h1>
+<nav id="nav"></nav></header>
+<main id="app"></main>
+
+<script>
+const K='dropTracker.v1';
+const uid=()=>Math.random().toString(36).slice(2,9);
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Math.round(n).toLocaleString();
+const dur=ms=>{const m=Math.max(0,Math.floor(ms/6e4));return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m'};
+const local=ms=>new Date(ms-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16);
+const DEFTYPES=['Grinding','Gathering','Fishing','Bosses','Hunting','Reward','Other'];
+const DEFSUBS={Gathering:['Tanning','Hoe Gathering','Butchering','Chopping','Fluid Collecting','Scooping','Mining']};
+
+function load(){
+  let s=null;try{s=JSON.parse(localStorage.getItem(K))}catch(e){}
+  if(!s||!s.items){
+    const items={};
+    [['Meat','🥩',0],['Wood','🪵',0],['Ore','⛏️',0],['Hide','🐾',0],['Crystal','💎',0],['Silver','💰',1]]
+      .forEach(([name,icon,value])=>{items[uid()]={name,icon,value,trash:false}});
+    items[uid()]={name:'Trash',icon:'🗑️',value:0,trash:true};
+    s={items,zones:{},sessions:[],active:null,storage:{},types:[...DEFTYPES]};
+  }
+  if(!s.subtypes){
+    s.subtypes=JSON.parse(JSON.stringify(DEFSUBS));
+    ['Fishing','Bosses'].forEach(t=>{if(!s.types.includes(t))s.types.push(t)});
+  }
+  if((s.v||1)<2){
+    if(!s.types.includes('Hunting')){const bi=s.types.indexOf('Bosses');s.types.splice(bi>=0?bi+1:s.types.length,0,'Hunting')}
+    s.v=2;
+  }
+  s.market=s.market||[];s.manual=s.manual||[];delete s.storage;s.tax=s.tax??35;
+  if(s.trashValue)Object.values(s.items).forEach(i=>{if(i.trash&&!i.value)i.value=s.trashValue});
+  delete s.trashValue;
+  Object.values(s.items).forEach(i=>{if(i.trash===undefined)i.trash=/trash/i.test(i.name)});
+  return s;
+}
+let S=load(),tab='session',stage={},mon=local(Date.now()).slice(0,7),ft='',fs='',cf='',msrc='Other',stageS={},lmode='bag',msent=true,pend=null,pendBase={};
+function save(){try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}}
+
+const ic=it=>/^(https?:|\.{0,2}\/)|\.(png|jpe?g|webp|svg|gif)$/i.test(it.icon||'')?`<img src="${esc(it.icon)}" alt="">`:esc(it.icon||'📦');
+const cur=()=>S.sessions.find(s=>s.id===S.active);
+const val=i=>S.items[i]?S.items[i].value:0;
+const tname=s=>s.type+(s.sub?' · '+s.sub:'');
+const sTotals=s=>{const t={};s.yields.forEach(y=>{for(const[i,q]of Object.entries(y.items))t[i]=(t[i]||0)+q});return t};
+const sSilver=s=>Object.entries(sTotals(s)).reduce((a,[i,q])=>a+q*val(i),0);
+const sHours=s=>((s.end||Date.now())-s.start)/36e5;
+const zname=z=>S.zones[z]?.name||'Unknown zone';
+const itemOpts=()=>Object.values(S.items).map(i=>`<option value="${esc(i.name)}">`).join('');
+function getItem(name,icon){
+  name=name.trim();
+  let id=Object.keys(S.items).find(i=>S.items[i].name.toLowerCase()===name.toLowerCase());
+  if(!id){id=uid();S.items[id]={name,icon:icon||'📦',value:0,trash:/trash/i.test(name)}}
+  return id;
+}
+const inMonth=ms=>local(ms).slice(0,7)===mon;
+
+/* ---------- Session actions ---------- */
+function setSubs(){
+  const l=S.subtypes[$('#ty').value]||[],e=$('#sb');
+  e.style.display=l.length?'':'none';
+  e.innerHTML='<option value="">Any / none</option>'+l.map(x=>`<option>${esc(x)}</option>`).join('');
+}
+function start(){
+  const zn=$('#zn').value.trim();
+  if(!zn){alert('Enter a zone first.');return}
+  let zid=Object.keys(S.zones).find(z=>S.zones[z].name.toLowerCase()===zn.toLowerCase());
+  if(!zid){zid=uid();S.zones[zid]={name:zn,items:[]}}
+  const el=$('#st'),custom=el.value!==el.dataset.def;
+  pend={type:$('#ty').value,sub:$('#sb').value,zone:zid,start:custom?(new Date(el.value).getTime()||null):null};
+  pendBase={};save();render();
+}
+function beginSession(){
+  const base={};
+  for(const[i,v]of Object.entries(pendBase))if(+v>0)base[i]=+v;
+  const s={id:uid(),type:pend.type,sub:pend.sub,zone:pend.zone,start:pend.start??Date.now(),end:null,yields:[],base};
+  S.sessions.push(s);S.active=s.id;pend=null;pendBase={};stage={};stageS={};save();render();
+}
+function cancelPend(){pend=null;pendBase={};render()}
+function endSession(){const s=cur();s.end=Date.now();S.active=null;stage={};stageS={};save();render()}
+function replay(s){
+  const bag={...(s.base||{})};
+  s.yields.forEach(y=>{
+    if(!y.counts){y.counts={...y.items};y.mode='new'}
+    y.sent=y.sent||{};
+    const items={},low=[];
+    for(const[i,c]of Object.entries(y.counts)){
+      if(y.mode==='bag'){const b=bag[i]||0;if(c<b)low.push(i);items[i]=Math.max(0,c-b);bag[i]=c}
+      else{items[i]=c;bag[i]=(bag[i]||0)+c}
+    }
+    for(const[i,q]of Object.entries(y.sent))bag[i]=Math.max(0,(bag[i]||0)-q);
+    y.items=items;y.low=low;
+  });
+  return bag;
+}
+function logYield(){
+  const s=cur(),z=S.zones[s.zone],counts={},sent={};
+  for(const[i,v]of Object.entries(stage))if(v!==''&&v!=null&&!isNaN(+v))counts[i]=+v;
+  for(const[i,v]of Object.entries(stageS))if(+v>0)sent[i]=+v;
+  if(!Object.keys(counts).length&&!Object.keys(sent).length)return;
+  s.yields.push({t:Date.now(),mode:lmode,counts,sent});
+  replay(s);
+  for(const i of Object.keys(counts))if(!z.items.includes(i))z.items.push(i);
+  stage={};stageS={};save();render();
+}
+function sendAll(i){
+  const s=cur(),bag=replay(s),v=stage[i];
+  const typed=v!==undefined&&v!==''&&!isNaN(+v);
+  stageS[i]=typed?(lmode==='bag'?+v:(bag[i]||0)+ +v):(bag[i]||0);
+  render();
+}
+function delYield(sid,idx){
+  const s=S.sessions.find(x=>x.id===sid);
+  if(!confirm('Delete this log? Later logs are recalculated from the remaining ones.'))return;
+  s.yields.splice(idx,1);replay(s);save();render();
+}
+function delSession(sid){
+  if(!confirm('Delete this whole session and its yields?'))return;
+  S.sessions=S.sessions.filter(s=>s.id!==sid);save();render();
+}
+function addZoneItem(){
+  const n=$('#ni').value.trim();if(!n)return;
+  const id=getItem(n,$('#nic').value.trim()),z=S.zones[(cur()||pend).zone];
+  if(!z.items.includes(id))z.items.push(id);
+  save();render();
+}
+function addZoneTrash(){
+  const z=S.zones[(cur()||pend).zone],id=getItem(z.name+' trash','🗑️');
+  S.items[id].trash=true;
+  if(!z.items.includes(id))z.items.push(id);
+  save();render();
+}
+
+/* ---------- Collected (intake record) ---------- */
+function collected(){
+  const r={};
+  const o=i=>r[i]=r[i]||{tot:0,sent:0,src:{}};
+  S.sessions.forEach(x=>x.yields.forEach(y=>{
+    if(!inMonth(y.t)||(cf&&x.type!==cf))return;
+    for(const[i,q]of Object.entries(y.items)){if(!q)continue;const e=o(i);e.tot+=q;e.src[tname(x)]=(e.src[tname(x)]||0)+q}
+    for(const[i,q]of Object.entries(y.sent||{}))o(i).sent+=q;
+  }));
+  S.manual.forEach(m=>{
+    if(!inMonth(m.t)||(cf&&m.source!==cf))return;
+    const e=o(m.item),k=m.source+' · by hand';
+    e.tot+=m.qty;e.sent+=m.sent??m.qty;e.src[k]=(e.src[k]||0)+m.qty;
+  });
+  return r;
+}
+function addManual(i){
+  let id,q;
+  if(i){id=i;q=+$('#qa_'+i).value}
+  else{const n=$('#sn').value.trim();if(!n)return;id=getItem(n,$('#sic').value.trim());q=+$('#sq').value}
+  if(!q)return;
+  S.manual.push({id:uid(),t:Date.now(),item:id,qty:q,source:msrc,sent:msent?q:0});save();render();
+}
+function delManual(mid){S.manual=S.manual.filter(x=>x.id!==mid);save();render()}
+function filt(v){v=v.toLowerCase();document.querySelectorAll('.crow').forEach(r=>r.style.display=r.dataset.n.includes(v)?'':'none')}
+
+/* ---------- Market actions ---------- */
+const mNet=m=>m.kind==='sell'?m.qty*m.price*(1-m.tax/100):-m.qty*m.price;
+function addMarket(){
+  const n=$('#mn').value.trim(),q=+$('#mq').value,p=+$('#mp').value;
+  if(!n||!q||!p){alert('Enter an item, quantity and unit price.');return}
+  const kind=$('#mk').value,id=getItem(n);
+  S.market.push({id:uid(),t:Date.now(),kind,item:id,qty:q,price:p,tax:kind==='sell'?(+$('#mtx').value||0):0});
+  save();render();
+}
+function delMarket(mid){
+  const m=S.market.find(x=>x.id===mid);
+  if(!confirm('Delete this entry?'))return;
+  S.market=S.market.filter(x=>x.id!==mid);save();render();
+}
+function mStats(){
+  const mk=S.market.filter(m=>inMonth(m.t));let gross=0,tax=0,spent=0;
+  mk.forEach(m=>{if(m.kind==='sell'){gross+=m.qty*m.price;tax+=m.qty*m.price*m.tax/100}else spent+=m.qty*m.price});
+  return{mk,gross,tax,spent,net:gross-tax-spent};
+}
+
+/* ---------- Data actions ---------- */
+function addType(){const n=$('#nt').value.trim();if(n&&!S.types.includes(n)){S.types.push(n);save();render()}}
+function delType(k){if(confirm('Remove this type from the list? Past sessions keep it.')){delete S.subtypes[S.types[k]];S.types.splice(k,1);save();render()}}
+function addSub(k){
+  const t=S.types[k],n=$('#sub'+k).value.trim();if(!n)return;
+  S.subtypes[t]=S.subtypes[t]||[];if(!S.subtypes[t].includes(n))S.subtypes[t].push(n);save();render();
+}
+function delSub(k,j){S.subtypes[S.types[k]].splice(j,1);save();render()}
+
+/* ---------- Views ---------- */
+function history(){
+  const done=S.sessions.filter(s=>s.end).sort((a,b)=>b.start-a.start);
+  if(!done.length)return '';
+  return `<div class="card"><h2>Finished sessions</h2><div class="table-wrap"><table>
+  <tr><th>Start</th><th>Type</th><th>Zone</th><th>Time</th><th>Silver</th><th>Silver/hr</th><th></th></tr>
+  ${done.map(s=>`<tr><td>${new Date(s.start).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+  <td>${esc(tname(s))}</td><td>${esc(zname(s.zone))}</td><td>${dur(s.end-s.start)}</td><td>${fmt(sSilver(s))}</td>
+  <td>${fmt(sSilver(s)/sHours(s))}</td><td><button class="bad" onclick="delSession('${s.id}')">✕</button></td></tr>`).join('')}
+  </table></div></div>`;
+}
+function vDeclare(){
+  const z=S.zones[pend.zone];
+  return `<div class="card"><h2>Starting inventory</h2>
+  <p class="mut">${esc(tname(pend))} in ${esc(z.name)}. Enter what's already in your inventory. Leave empty or 0 for none. It won't count as drops.</p>
+  ${z.items.length?`<div class="grid">${z.items.map(i=>{const it=S.items[i];return `<div class="tile"><div class="ico">${ic(it)}</div><div>${esc(it.name)}</div>
+  <input type="number" min="0" placeholder="0" value="${pendBase[i]??''}" oninput="pendBase['${i}']=this.value" aria-label="${esc(it.name)} in inventory"></div>`}).join('')}</div>`
+  :'<p class="mut">No loot saved for this zone yet. Add the items it drops below, or just start.</p>'}
+  <div class="row"><input id="ni" list="il" placeholder="Add item to this zone" class="grow"><datalist id="il">${itemOpts()}</datalist>
+  <input id="nic" class="sm" placeholder="🙂" aria-label="Icon"><button onclick="addZoneItem()">Add item</button>
+  <button onclick="addZoneTrash()">Add zone trash</button></div>
+  <div class="row"><button onclick="cancelPend()">Back</button><button class="pri" onclick="beginSession()">Start session</button></div></div>`;
+}
+function vSession(){
+  const s=cur();
+  if(!s&&pend)return vDeclare();
+  if(!s){
+    return `<div class="card"><h2>Start a session</h2>
+    <div class="row"><select id="ty" onchange="setSubs()">${S.types.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
+    <select id="sb"></select>
+    <input id="zn" list="zl" placeholder="Zone or area" class="grow">
+    <datalist id="zl">${Object.values(S.zones).map(z=>`<option value="${esc(z.name)}">`).join('')}</datalist></div>
+    <div class="row"><label class="mut">Start time</label>${(()=>{const d=local(Date.now());return `<input id="st" type="datetime-local" value="${d}" data-def="${d}">`})()}
+    <button class="pri" onclick="start()">Start</button></div>
+    <p class="mut">Pick a zone you've run before and its loot list comes back. A new zone builds its list as you log drops.</p></div>`+history();
+  }
+  const z=S.zones[s.zone],tot=sTotals(s),bag=replay(s),h=Math.max(sHours(s),1/60);
+  const icons=o=>Object.entries(o).filter(([,q])=>q).map(([i,q])=>`${ic(S.items[i])} ${fmt(q)}`).join(' &nbsp; ')||'–';
+  let prev=s.start;
+  const rows=s.yields.map((y,k)=>{
+    const gap=y.t-prev;prev=y.t;
+    const sil=Object.entries(y.items).reduce((a,[i,q])=>a+q*val(i),0);
+    return `<tr><td>${new Date(y.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</td><td>${dur(gap)}</td>
+    <td>${icons(y.items)}${y.low.length?`<div class="mut">count lower than expected: ${y.low.map(i=>esc(S.items[i].name)).join(', ')}</div>`:''}</td>
+    <td>${icons(y.sent)}</td><td>${fmt(sil)}</td><td>${gap>6e4?fmt(sil/(gap/36e5)):'–'}</td>
+    <td><button class="bad" onclick="delYield('${s.id}',${k})">✕</button></td></tr>`}).join('');
+  return `<div class="card"><div class="between"><div><b>${esc(tname(s))}</b> in ${esc(z.name)}
+  <div class="mut">Started ${new Date(s.start).toLocaleString()}</div>
+  ${Object.keys(s.base||{}).length?`<div class="mut">Started with ${icons(s.base)}</div>`:''}</div>
+  <div class="timer" id="tm">${dur(Date.now()-s.start)}</div>
+  <button class="bad" onclick="endSession()">End session</button></div></div>
+  <div class="card"><h2>Log</h2>
+  <select onchange="lmode=this.value;render()" aria-label="What you are typing">
+  <option value="bag" ${lmode==='bag'?'selected':''}>I'm typing my inventory count</option><option value="new" ${lmode==='new'?'selected':''}>I'm typing new drops only</option></select>
+  <p class="mut">${lmode==='bag'?'Type the number the game shows. New drops are the count minus what was already in your inventory after your last log and any storage transfers.':'Type only what you picked up since the last log.'} Use To storage for what you moved. Leave a box empty to skip that item.</p>
+  ${z.items.length?`<div class="grid">${z.items.map(i=>{const it=S.items[i];return `<div class="tile"><div class="ico">${ic(it)}</div>
+  <div>${esc(it.name)}</div><div class="mut">${fmt(tot[i]||0)} collected · inv ${fmt(bag[i]||0)}</div>
+  <input type="number" min="0" placeholder="${lmode==='bag'?'Inv now':'New drops'}" value="${stage[i]??''}" oninput="stage['${i}']=this.value" aria-label="${esc(it.name)} count">
+  <div class="row" style="margin-top:6px;flex-wrap:nowrap"><input type="number" min="0" placeholder="To storage" value="${stageS[i]??''}" style="min-width:0" oninput="stageS['${i}']=this.value" aria-label="${esc(it.name)} sent to storage">
+  <button onclick="sendAll('${i}')" title="Send the whole inventory to storage">all</button></div></div>`}).join('')}</div>`
+  :`<p class="mut">No loot for this zone yet. Add the items it drops below.</p>`}
+  <div class="row"><button class="pri" onclick="logYield()">Log</button></div>
+  <div class="row"><input id="ni" list="il" placeholder="Add item to this zone" class="grow"><datalist id="il">${itemOpts()}</datalist>
+  <input id="nic" class="sm" placeholder="🙂" aria-label="Icon"><button onclick="addZoneItem()">Add item</button>
+  <button onclick="addZoneTrash()">Add zone trash</button></div></div>
+  <div class="card"><h2>Checkpoints</h2>
+  ${s.yields.length?`<div class="table-wrap"><table><tr><th>Time</th><th>Since last</th><th>New</th><th>To storage</th><th>Silver</th><th>Silver/hr</th><th></th></tr>${rows}</table></div>`:'<p class="mut">No logs yet.</p>'}
+  <p class="mut">Silver so far: ${fmt(sSilver(s))}</p>
+  <p class="mut">Per 30 minutes on average: ${Object.entries(tot).filter(([,q])=>q>0).map(([i,q])=>`${ic(S.items[i])} ${(q/h/2).toFixed(1)}`).join(' &nbsp; ')||'–'}</p></div>`+history();
+}
+function vCollected(){
+  const r=collected(),ids=Object.keys(r).sort((a,b)=>r[b].tot-r[a].tot);
+  const tv=ids.reduce((a,i)=>a+r[i].tot*val(i),0),sv=ids.reduce((a,i)=>a+r[i].sent*val(i),0);
+  const man=S.manual.filter(m=>inMonth(m.t)).sort((a,b)=>b.t-a.t);
+  const typeOpts=sel=>S.types.map(x=>`<option ${x===sel?'selected':''}>${esc(x)}</option>`).join('');
+  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Collected</h2><input type="month" value="${mon}" onchange="mon=this.value;render()">
+  <select onchange="cf=this.value;render()" aria-label="Filter by source"><option value="">All sources</option>${typeOpts(cf)}</select></div>
+  <div class="stats"><div class="stat key"><b>${fmt(tv)}</b>Silver value collected</div><div class="stat"><b>${fmt(sv)}</b>Silver value sent to storage</div>
+  <div class="stat"><b>${ids.length}</b>Different items</div></div>
+  <div class="card"><h2>Add by hand</h2>
+  <div class="row"><input id="sn" list="il" placeholder="Item" class="grow"><datalist id="il">${itemOpts()}</datalist>
+  <input id="sic" class="sm" placeholder="🙂" aria-label="Icon for new item"><input id="sq" type="number" placeholder="Qty">
+  <select id="msrc" onchange="msrc=this.value" aria-label="Source">${typeOpts(msrc)}</select>
+  <label><input type="checkbox" ${msent?'checked':''} onchange="msent=this.checked"> Also sent to storage</label>
+  <button class="pri" onclick="addManual()">+ Add</button></div>
+  <p class="mut">Session logs appear here on their own. Use this for anything that came in outside a session. The source and storage tick also apply to the + buttons below.</p></div>
+  <div class="card"><h2>Everything that came in</h2>
+  <div class="row" style="margin:0 0 8px"><input placeholder="Filter items" oninput="filt(this.value)" class="grow"></div>
+  <div class="table-wrap"><table><tr><th>Item</th><th>Collected</th><th>To storage</th><th>Not sent</th><th>Silver</th><th>Add more</th></tr>
+  ${ids.map(i=>{const it=S.items[i],o=r[i];return `<tr class="crow" data-n="${esc(it.name.toLowerCase())}"><td>${ic(it)} ${esc(it.name)}
+  <div class="mut">${Object.entries(o.src).map(([k,q])=>esc(k)+' '+fmt(q)).join(' · ')}</div></td>
+  <td>${fmt(o.tot)}</td><td>${fmt(o.sent)}</td><td>${fmt(Math.max(0,o.tot-o.sent))}</td><td>${fmt(o.tot*val(i))}</td>
+  <td style="white-space:nowrap"><input type="number" value="1" id="qa_${i}" class="sm" aria-label="Quantity to add"> <button onclick="addManual('${i}')">+</button></td></tr>`}).join('')||'<tr><td colspan="6" class="mut">Nothing collected yet this month.</td></tr>'}
+  </table></div></div>
+  ${man.length?`<div class="card"><h2>Added by hand</h2>${man.map(m=>`<div class="ylog"><span class="mut">${new Date(m.t).toLocaleDateString([], {month:'short',day:'numeric'})}</span>
+  <span class="grow">${ic(S.items[m.item]||{icon:'?'})} ${esc((S.items[m.item]||{name:'?'}).name)} × ${fmt(m.qty)} <span class="mut">${esc(m.source)}${(m.sent??m.qty)?', sent to storage':''}</span></span>
+  <button class="bad" onclick="delManual('${m.id}')">✕</button></div>`).join('')}</div>`:''}`;
+}
+function vMarket(){
+  const m=mStats(),rows=[...m.mk].sort((a,b)=>b.t-a.t);
+  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Central market</h2><input type="month" value="${mon}" onchange="mon=this.value;render()"></div>
+  <div class="stats"><div class="stat"><b>${fmt(m.gross)}</b>Gross sales</div><div class="stat"><b>${fmt(m.tax)}</b>Tax paid</div>
+  <div class="stat"><b>${fmt(m.gross-m.tax)}</b>Net sales</div><div class="stat"><b>${fmt(m.spent)}</b>Spent buying</div>
+  <div class="stat key"><b class="${m.net<0?'neg':''}">${fmt(m.net)}</b>Net profit</div></div>
+  <div class="card"><h2>Add entry</h2>
+  <div class="row"><select id="mk" onchange="$('#mtx').disabled=this.value==='buy'"><option value="sell">Sale</option><option value="buy">Purchase</option></select>
+  <input id="mn" list="il" placeholder="Item" class="grow"><datalist id="il">${itemOpts()}</datalist></div>
+  <div class="row"><input id="mq" type="number" min="0" placeholder="Qty"><input id="mp" type="number" min="0" placeholder="Price each">
+  <label class="mut">Tax %</label><input id="mtx" type="number" min="0" max="100" value="${S.tax}" class="sm">
+  <button class="pri" onclick="addMarket()">Add</button></div>
+  <p class="mut">Tax applies to sales only. Purchases have none. Market entries don't change storage.</p></div>
+  <div class="card"><h2>Entries</h2><div class="table-wrap"><table>
+  <tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Price</th><th>Tax</th><th>Net</th><th></th></tr>
+  ${rows.map(x=>{const it=S.items[x.item]||{name:'?',icon:''},n=mNet(x);return `<tr><td>${new Date(x.t).toLocaleDateString([], {month:'short',day:'numeric'})}</td>
+  <td>${x.kind==='sell'?'Sale':'Purchase'}</td><td>${ic(it)} ${esc(it.name)}</td><td>${fmt(x.qty)}</td><td>${fmt(x.price)}</td>
+  <td>${x.kind==='sell'?x.tax+'%':'–'}</td><td class="${n<0?'neg':'pos'}">${fmt(n)}</td>
+  <td><button class="bad" onclick="delMarket('${x.id}')">✕</button></td></tr>`}).join('')||'<tr><td colspan="8" class="mut">No entries this month.</td></tr>'}
+  </table></div></div>`;
+}
+function vAnalytics(){
+  const ss=S.sessions.filter(s=>inMonth(s.start)&&(!ft||s.type===ft)&&(!fs||s.sub===fs));
+  const H=ss.reduce((a,s)=>a+sHours(s),0),V=ss.reduce((a,s)=>a+sSilver(s),0),rate=H?V/H:0;
+  window._rate=rate;
+  const agg=kf=>{const m={};ss.forEach(s=>{const k=kf(s);m[k]=m[k]||{n:0,h:0,v:0};m[k].n++;m[k].h+=sHours(s);m[k].v+=sSilver(s)});return m};
+  const tbl=(m,lab,nm)=>`<div class="table-wrap"><table><tr><th>${lab}</th><th>Sessions</th><th>Hours</th><th>Silver</th><th>Silver/hr</th></tr>
+  ${Object.entries(m).map(([k,x])=>`<tr><td>${esc(nm(k))}</td><td>${x.n}</td><td>${x.h.toFixed(1)}</td><td>${fmt(x.v)}</td><td>${fmt(x.h?x.v/x.h:0)}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No sessions match.</td></tr>'}</table></div>`;
+  const t={};ss.forEach(s=>{const x=sTotals(s);for(const i in x)t[i]=(t[i]||0)+x[i]});
+  const rows=Object.keys(S.items).filter(i=>!S.items[i].trash).map(i=>({k:i,q:t[i]||0,v:(t[i]||0)*S.items[i].value}));
+  const tids=Object.keys(S.items).filter(i=>S.items[i].trash);
+  rows.push({k:'_trash',q:tids.reduce((a,i)=>a+(t[i]||0),0),v:tids.reduce((a,i)=>a+(t[i]||0)*S.items[i].value,0)});
+  const shown=rows.filter(r=>r.q>0).sort((a,b)=>b.v-a.v||b.q-a.q);
+  const m=mStats(),subs=S.subtypes[ft]||[];
+  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Analytics</h2><input type="month" value="${mon}" onchange="mon=this.value;render()">
+  <select onchange="ft=this.value;fs='';render()" aria-label="Filter by type"><option value="">All types</option>${S.types.map(x=>`<option ${x===ft?'selected':''}>${esc(x)}</option>`).join('')}</select>
+  ${subs.length?`<select onchange="fs=this.value;render()" aria-label="Filter by sub-type"><option value="">All ${esc(ft)}</option>${subs.map(x=>`<option ${x===fs?'selected':''}>${esc(x)}</option>`).join('')}</select>`:''}</div>
+  <div class="stats"><div class="stat key"><b>${fmt(rate)}</b>Avg silver per hour</div>
+  <div class="stat"><b>${fmt(V)}</b>Total silver</div><div class="stat"><b>${H.toFixed(1)}h</b>Hours played</div>
+  <div class="stat"><b>${ss.length}</b>Sessions</div></div>
+  <div class="card"><h2>What if</h2><div class="row"><label>Target silver</label><input id="tg" type="number" oninput="calc()" style="width:130px">
+  <span id="o1" class="mut">enter a number</span></div>
+  <div class="row"><label>Hours played</label><input id="hr" type="number" oninput="calc()" style="width:130px">
+  <span id="o2" class="mut">enter a number</span></div>
+  <p class="mut">Uses the average above (${fmt(rate)} silver per hour with the current filters).</p></div>
+  <div class="card"><h2>By activity</h2>${tbl(agg(tname),'Activity',k=>k)}</div>
+  <div class="card"><h2>By zone</h2>${tbl(agg(s=>s.zone),'Zone',zname)}</div>
+  <div class="card"><h2>Drops</h2><p class="mut">Set item values under Data. Trash from all zones is combined here, each at its own value.</p>
+  <div class="table-wrap"><table><tr><th>Item</th><th>Qty</th><th>Per hour</th><th>Per 30 min</th><th>Silver</th><th>Share</th></tr>
+  ${shown.map(r=>{const it=r.k==='_trash'?{icon:'🗑️',name:'Trash (all zones)'}:S.items[r.k];
+    return `<tr><td>${ic(it)} ${esc(it.name)}</td><td>${fmt(r.q)}</td><td>${H?(r.q/H).toFixed(1):0}</td><td>${H?(r.q/H/2).toFixed(1):0}</td><td>${fmt(r.v)}</td><td>${V?Math.round(r.v/V*100):0}%</td></tr>`}).join('')||'<tr><td colspan="6" class="mut">No drops logged for these filters.</td></tr>'}
+  </table></div></div>
+  <div class="card"><h2>Central market this month</h2><p>Net sales ${fmt(m.gross-m.tax)} (after ${fmt(m.tax)} tax), spent ${fmt(m.spent)}, net profit
+  <b class="${m.net<0?'neg':'pos'}">${fmt(m.net)}</b>. Not included in silver per hour. Details are on the Market tab.</p></div>`;
+}
+function calc(){
+  const r=window._rate||0,tg=+$('#tg').value,hr=+$('#hr').value;
+  $('#o1').textContent=tg&&r?`about ${(tg/r).toFixed(1)} hours`:(tg?'no average yet':'enter a number');
+  $('#o2').textContent=hr?`about ${fmt(hr*r)} silver`:'enter a number';
+}
+function vData(){
+  return `<div class="card"><h2>Backup</h2><p class="mut">Data lives in this browser. Export before clearing your browser data, or to move to another device.</p>
+  <div class="row"><button class="pri" onclick="exp()">Export JSON</button>
+  <label class="mut">Import <input type="file" accept=".json" onchange="imp(this.files[0])"></label>
+  <button class="bad" onclick="if(confirm('Delete everything?')){localStorage.removeItem(K);S=load();render()}">Reset all</button></div></div>
+  <div class="card"><h2>Market tax</h2><div class="row"><label>Default sales tax %</label>
+  <input type="number" min="0" max="100" class="sm" value="${S.tax}" onchange="S.tax=+this.value||0;save()"></div>
+  <p class="mut">Used as the starting value when you add a sale. You can change it per entry.</p></div>
+  <div class="card"><h2>Types and sub-types</h2>
+  ${S.types.map((t,k)=>`<div class="srow"><b class="grow">${esc(t)}</b><button class="bad" onclick="delType(${k})">Remove type</button>
+  <div style="width:100%">${(S.subtypes[t]||[]).map((x,j)=>`<span class="chip">${esc(x)}<button onclick="delSub(${k},${j})" aria-label="Remove ${esc(x)}">✕</button></span>`).join('')}
+  <span class="row" style="display:inline-flex;margin:0"><input id="sub${k}" placeholder="New sub-type" style="width:150px"><button onclick="addSub(${k})">Add</button></span></div></div>`).join('')}
+  <div class="row"><input id="nt" placeholder="New type" class="grow"><button class="pri" onclick="addType()">Add type</button></div></div>
+  <div class="card"><h2>Items and values</h2><p class="mut">Value is the silver for one unit. Tick Trash for trash items; give each zone's trash its own name and value. Icon can be an emoji or an image path like icons/wood.png.</p>
+  <div class="row"><input id="dn" placeholder="New item name" class="grow"><input id="dic" class="sm" placeholder="🙂" aria-label="Icon">
+  <input id="dv" type="number" min="0" placeholder="Value"><label><input type="checkbox" id="dt"> Trash</label><button class="pri" onclick="addDataItem()">Add item</button></div>
+  <div style="margin-top:8px">${Object.entries(S.items).map(([i,it])=>`<div class="srow"><span class="ico">${ic(it)}</span>
+  <input class="grow" value="${esc(it.name)}" onchange="S.items['${i}'].name=this.value;save()" aria-label="Name">
+  <input style="width:100px" value="${esc(it.icon)}" onchange="S.items['${i}'].icon=this.value;save();render()" aria-label="Icon">
+  <input type="number" min="0" style="width:110px" value="${it.value}" onchange="S.items['${i}'].value=+this.value||0;save()" aria-label="Value">
+  <label><input type="checkbox" ${it.trash?'checked':''} onchange="S.items['${i}'].trash=this.checked;save()"> Trash</label></div>`).join('')}</div></div>`;
+}
+function addDataItem(){
+  const n=$('#dn').value.trim();if(!n)return;
+  const id=getItem(n,$('#dic').value.trim());
+  S.items[id].value=+$('#dv').value||0;
+  if($('#dt').checked)S.items[id].trash=true;
+  save();render();
+}
+function exp(){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}));
+  a.download='drop-tracker-'+local(Date.now()).slice(0,10)+'.json';a.click();
+}
+function imp(f){
+  if(!f)return;const r=new FileReader();
+  r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.items||!d.sessions)throw 0;localStorage.setItem(K,JSON.stringify(d));S=load();render()}catch(e){alert('That file is not a drop tracker export.')}};
+  r.readAsText(f);
+}
+function render(){
+  const tabs={session:['Session',vSession],collected:['Collected',vCollected],market:['Market',vMarket],analytics:['Analytics',vAnalytics],data:['Data',vData]};
+  $('#nav').innerHTML=Object.entries(tabs).map(([k,[l]])=>`<button class="${k===tab?'on':''}" onclick="tab='${k}';render()">${l}</button>`).join('');
+  $('#app').innerHTML=tabs[tab][1]();
+  if($('#sb'))setSubs();
+}
+setInterval(()=>{const e=$('#tm'),s=cur();if(e&&s)e.textContent=dur(Date.now()-s.start)},1000);
+render();
+</script>
+</body>
+</html>
