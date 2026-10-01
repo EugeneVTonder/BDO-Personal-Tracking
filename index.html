@@ -51,6 +51,16 @@ th{color:var(--mut);font-weight:500}
 .chip{display:inline-flex;gap:4px;align-items:center;border:1px solid var(--line);border-radius:14px;padding:1px 2px 1px 10px;margin:2px;font-size:13px}
 .chip button{border:0;background:none;padding:2px 7px;color:var(--bad)}
 .pos{color:var(--ok)}.neg{color:var(--bad)}
+.sug{display:flex;flex-wrap:wrap;gap:6px;width:100%}
+.sug:empty{display:none}
+.sug button{padding:4px 12px;font-size:13px;border-radius:14px}
+.irow{padding:10px 0;border-bottom:1px solid var(--line)}
+.irow .row{margin-top:8px}
+@media (max-width:600px){
+  input,select{font-size:16px}
+  .row input.grow{flex:1 1 100%}
+  main{padding:12px}
+}
 </style>
 </head>
 <body>
@@ -86,6 +96,18 @@ function load(){
     if(!s.types.includes('Hunting')){const bi=s.types.indexOf('Bosses');s.types.splice(bi>=0?bi+1:s.types.length,0,'Hunting')}
     s.v=2;
   }
+  if((s.v||1)<3){
+    Object.entries(s.zones).forEach(([zid,z])=>{
+      const types=[...new Set(s.sessions.filter(x=>x.zone===zid).map(x=>x.type))];
+      if(!types.length)return;
+      z.type=types[0];
+      types.slice(1).forEach(t=>{
+        const nz=uid();s.zones[nz]={name:z.name,items:[...z.items],type:t};
+        s.sessions.forEach(x=>{if(x.zone===zid&&x.type===t)x.zone=nz});
+      });
+    });
+    s.v=3;
+  }
   s.market=s.market||[];s.manual=s.manual||[];delete s.storage;s.tax=s.tax??35;
   if(s.trashValue)Object.values(s.items).forEach(i=>{if(i.trash&&!i.value)i.value=s.trashValue});
   delete s.trashValue;
@@ -103,7 +125,16 @@ const sTotals=s=>{const t={};s.yields.forEach(y=>{for(const[i,q]of Object.entrie
 const sSilver=s=>Object.entries(sTotals(s)).reduce((a,[i,q])=>a+q*val(i),0);
 const sHours=s=>((s.end||Date.now())-s.start)/36e5;
 const zname=z=>S.zones[z]?.name||'Unknown zone';
+const zlabel=z=>{const o=S.zones[z];return o?o.name+(o.type?' ('+o.type+')':''):'Unknown zone'};
 const itemOpts=()=>Object.values(S.items).map(i=>`<option value="${esc(i.name)}">`).join('');
+function sug(id,kind){
+  const el=$('#'+id),box=$('#sg_'+id);if(!el||!box)return;
+  const q=el.value.trim().toLowerCase();
+  const names=kind==='zone'?Object.values(S.zones).filter(z=>z.type===$('#ty').value).map(z=>z.name):Object.values(S.items).map(i=>i.name);
+  box.innerHTML=names.filter(n=>n.toLowerCase().includes(q)&&n.toLowerCase()!==q).sort().slice(0,8)
+    .map(n=>`<button type="button" data-v="${esc(n)}" onclick="pick('${id}',this.dataset.v)">${esc(n)}</button>`).join('');
+}
+function pick(id,v){$('#'+id).value=v;$('#sg_'+id).innerHTML=''}
 function getItem(name,icon){
   name=name.trim();
   let id=Object.keys(S.items).find(i=>S.items[i].name.toLowerCase()===name.toLowerCase());
@@ -121,10 +152,11 @@ function setSubs(){
 function start(){
   const zn=$('#zn').value.trim();
   if(!zn){alert('Enter a zone first.');return}
-  let zid=Object.keys(S.zones).find(z=>S.zones[z].name.toLowerCase()===zn.toLowerCase());
-  if(!zid){zid=uid();S.zones[zid]={name:zn,items:[]}}
+  const type=$('#ty').value;
+  let zid=Object.keys(S.zones).find(z=>S.zones[z].type===type&&S.zones[z].name.toLowerCase()===zn.toLowerCase());
+  if(!zid){zid=uid();S.zones[zid]={name:zn,items:[],type}}
   const el=$('#st'),custom=el.value!==el.dataset.def;
-  pend={type:$('#ty').value,sub:$('#sb').value,zone:zid,start:custom?(new Date(el.value).getTime()||null):null};
+  pend={type,sub:$('#sb').value,zone:zid,start:custom?(new Date(el.value).getTime()||null):null};
   pendBase={};save();render();
 }
 function beginSession(){
@@ -261,7 +293,7 @@ function vDeclare(){
   ${z.items.length?`<div class="grid">${z.items.map(i=>{const it=S.items[i];return `<div class="tile"><div class="ico">${ic(it)}</div><div>${esc(it.name)}</div>
   <input type="number" min="0" placeholder="0" value="${pendBase[i]??''}" oninput="pendBase['${i}']=this.value" aria-label="${esc(it.name)} in inventory"></div>`}).join('')}</div>`
   :'<p class="mut">No loot saved for this zone yet. Add the items it drops below, or just start.</p>'}
-  <div class="row"><input id="ni" list="il" placeholder="Add item to this zone" class="grow"><datalist id="il">${itemOpts()}</datalist>
+  <div class="row"><input id="ni" placeholder="Add item to this zone" class="grow" autocomplete="off" onfocus="sug('ni','item')" oninput="sug('ni','item')"><div class="sug" id="sg_ni"></div>
   <input id="nic" class="sm" placeholder="🙂" aria-label="Icon"><button onclick="addZoneItem()">Add item</button>
   <button onclick="addZoneTrash()">Add zone trash</button></div>
   <div class="row"><button onclick="cancelPend()">Back</button><button class="pri" onclick="beginSession()">Start session</button></div></div>`;
@@ -271,13 +303,12 @@ function vSession(){
   if(!s&&pend)return vDeclare();
   if(!s){
     return `<div class="card"><h2>Start a session</h2>
-    <div class="row"><select id="ty" onchange="setSubs()">${S.types.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
+    <div class="row"><select id="ty" onchange="setSubs();sug('zn','zone')">${S.types.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
     <select id="sb"></select>
-    <input id="zn" list="zl" placeholder="Zone or area" class="grow">
-    <datalist id="zl">${Object.values(S.zones).map(z=>`<option value="${esc(z.name)}">`).join('')}</datalist></div>
+    <input id="zn" placeholder="Zone or area" class="grow" autocomplete="off" onfocus="sug('zn','zone')" oninput="sug('zn','zone')"><div class="sug" id="sg_zn"></div></div>
     <div class="row"><label class="mut">Start time</label>${(()=>{const d=local(Date.now());return `<input id="st" type="datetime-local" value="${d}" data-def="${d}">`})()}
     <button class="pri" onclick="start()">Start</button></div>
-    <p class="mut">Pick a zone you've run before and its loot list comes back. A new zone builds its list as you log drops.</p></div>`+history();
+    <p class="mut">Zones are kept per type, so the same zone name has its own loot list for Grinding and for Gathering. Pick one you've run before and its list comes back.</p></div>`+history();
   }
   const z=S.zones[s.zone],tot=sTotals(s),bag=replay(s),h=Math.max(sHours(s),1/60);
   const icons=o=>Object.entries(o).filter(([,q])=>q).map(([i,q])=>`${ic(S.items[i])} ${fmt(q)}`).join(' &nbsp; ')||'–';
@@ -305,7 +336,7 @@ function vSession(){
   <button onclick="sendAll('${i}')" title="Send the whole inventory to storage">all</button></div></div>`}).join('')}</div>`
   :`<p class="mut">No loot for this zone yet. Add the items it drops below.</p>`}
   <div class="row"><button class="pri" onclick="logYield()">Log</button></div>
-  <div class="row"><input id="ni" list="il" placeholder="Add item to this zone" class="grow"><datalist id="il">${itemOpts()}</datalist>
+  <div class="row"><input id="ni" placeholder="Add item to this zone" class="grow" autocomplete="off" onfocus="sug('ni','item')" oninput="sug('ni','item')"><div class="sug" id="sg_ni"></div>
   <input id="nic" class="sm" placeholder="🙂" aria-label="Icon"><button onclick="addZoneItem()">Add item</button>
   <button onclick="addZoneTrash()">Add zone trash</button></div></div>
   <div class="card"><h2>Checkpoints</h2>
@@ -323,7 +354,7 @@ function vCollected(){
   <div class="stats"><div class="stat key"><b>${fmt(tv)}</b>Silver value collected</div><div class="stat"><b>${fmt(sv)}</b>Silver value sent to storage</div>
   <div class="stat"><b>${ids.length}</b>Different items</div></div>
   <div class="card"><h2>Add by hand</h2>
-  <div class="row"><input id="sn" list="il" placeholder="Item" class="grow"><datalist id="il">${itemOpts()}</datalist>
+  <div class="row"><input id="sn" placeholder="Item" class="grow" autocomplete="off" onfocus="sug('sn','item')" oninput="sug('sn','item')"><div class="sug" id="sg_sn"></div>
   <input id="sic" class="sm" placeholder="🙂" aria-label="Icon for new item"><input id="sq" type="number" placeholder="Qty">
   <select id="msrc" onchange="msrc=this.value" aria-label="Source">${typeOpts(msrc)}</select>
   <label><input type="checkbox" ${msent?'checked':''} onchange="msent=this.checked"> Also sent to storage</label>
@@ -349,7 +380,7 @@ function vMarket(){
   <div class="stat key"><b class="${m.net<0?'neg':''}">${fmt(m.net)}</b>Net profit</div></div>
   <div class="card"><h2>Add entry</h2>
   <div class="row"><select id="mk" onchange="$('#mtx').disabled=this.value==='buy'"><option value="sell">Sale</option><option value="buy">Purchase</option></select>
-  <input id="mn" list="il" placeholder="Item" class="grow"><datalist id="il">${itemOpts()}</datalist></div>
+  <input id="mn" placeholder="Item" class="grow" autocomplete="off" onfocus="sug('mn','item')" oninput="sug('mn','item')"><div class="sug" id="sg_mn"></div></div>
   <div class="row"><input id="mq" type="number" min="0" placeholder="Qty"><input id="mp" type="number" min="0" placeholder="Price each">
   <label class="mut">Tax %</label><input id="mtx" type="number" min="0" max="100" value="${S.tax}" class="sm">
   <button class="pri" onclick="addMarket()">Add</button></div>
@@ -387,7 +418,7 @@ function vAnalytics(){
   <span id="o2" class="mut">enter a number</span></div>
   <p class="mut">Uses the average above (${fmt(rate)} silver per hour with the current filters).</p></div>
   <div class="card"><h2>By activity</h2>${tbl(agg(tname),'Activity',k=>k)}</div>
-  <div class="card"><h2>By zone</h2>${tbl(agg(s=>s.zone),'Zone',zname)}</div>
+  <div class="card"><h2>By zone</h2>${tbl(agg(s=>s.zone),'Zone',zlabel)}</div>
   <div class="card"><h2>Drops</h2><p class="mut">Set item values under Data. Trash from all zones is combined here, each at its own value.</p>
   <div class="table-wrap"><table><tr><th>Item</th><th>Qty</th><th>Per hour</th><th>Per 30 min</th><th>Silver</th><th>Share</th></tr>
   ${shown.map(r=>{const it=r.k==='_trash'?{icon:'🗑️',name:'Trash (all zones)'}:S.items[r.k];
@@ -415,13 +446,15 @@ function vData(){
   <span class="row" style="display:inline-flex;margin:0"><input id="sub${k}" placeholder="New sub-type" style="width:150px"><button onclick="addSub(${k})">Add</button></span></div></div>`).join('')}
   <div class="row"><input id="nt" placeholder="New type" class="grow"><button class="pri" onclick="addType()">Add type</button></div></div>
   <div class="card"><h2>Items and values</h2><p class="mut">Value is the silver for one unit. Tick Trash for trash items; give each zone's trash its own name and value. Icon can be an emoji or an image path like icons/wood.png.</p>
-  <div class="row"><input id="dn" placeholder="New item name" class="grow"><input id="dic" class="sm" placeholder="🙂" aria-label="Icon">
-  <input id="dv" type="number" min="0" placeholder="Value"><label><input type="checkbox" id="dt"> Trash</label><button class="pri" onclick="addDataItem()">Add item</button></div>
-  <div style="margin-top:8px">${Object.entries(S.items).map(([i,it])=>`<div class="srow"><span class="ico">${ic(it)}</span>
-  <input class="grow" value="${esc(it.name)}" onchange="S.items['${i}'].name=this.value;save()" aria-label="Name">
-  <input style="width:100px" value="${esc(it.icon)}" onchange="S.items['${i}'].icon=this.value;save();render()" aria-label="Icon">
-  <input type="number" min="0" style="width:110px" value="${it.value}" onchange="S.items['${i}'].value=+this.value||0;save()" aria-label="Value">
-  <label><input type="checkbox" ${it.trash?'checked':''} onchange="S.items['${i}'].trash=this.checked;save()"> Trash</label></div>`).join('')}</div></div>`;
+  <div class="irow"><div class="row" style="margin:0;flex-wrap:nowrap"><input id="dic" placeholder="🙂" aria-label="Icon" style="flex:none;width:64px;text-align:center">
+  <input id="dn" placeholder="New item name" aria-label="Name" style="flex:1 1 0;min-width:0"></div>
+  <div class="row"><input id="dv" type="number" min="0" placeholder="Value" aria-label="Value" style="width:110px">
+  <label><input type="checkbox" id="dt"> Trash</label><button class="pri" onclick="addDataItem()">Add item</button></div></div>
+  ${Object.entries(S.items).map(([i,it])=>`<div class="irow"><div class="row" style="margin:0;flex-wrap:nowrap">
+  <input value="${esc(it.icon)}" onchange="S.items['${i}'].icon=this.value;save()" aria-label="Icon" style="flex:none;width:64px;text-align:center">
+  <input value="${esc(it.name)}" onchange="S.items['${i}'].name=this.value;save()" aria-label="Name" style="flex:1 1 0;min-width:0"></div>
+  <div class="row"><input type="number" min="0" style="width:110px" value="${it.value}" onchange="S.items['${i}'].value=+this.value||0;save()" aria-label="Value">
+  <label><input type="checkbox" ${it.trash?'checked':''} onchange="S.items['${i}'].trash=this.checked;save()"> Trash</label></div></div>`).join('')}</div>`;
 }
 function addDataItem(){
   const n=$('#dn').value.trim();if(!n)return;
