@@ -82,11 +82,7 @@ const DEFSUBS={Gathering:['Tanning','Hoe Gathering','Butchering','Chopping','Flu
 function load(){
   let s=null;try{s=JSON.parse(localStorage.getItem(K))}catch(e){}
   if(!s||!s.items){
-    const items={};
-    [['Meat','🥩',0],['Wood','🪵',0],['Ore','⛏️',0],['Hide','🐾',0],['Crystal','💎',0],['Silver','💰',1]]
-      .forEach(([name,icon,value])=>{items[uid()]={name,icon,value,trash:false}});
-    items[uid()]={name:'Trash',icon:'🗑️',value:0,trash:true};
-    s={items,zones:{},sessions:[],active:null,storage:{},types:[...DEFTYPES]};
+    s={items:{},zones:{},sessions:[],active:null,types:[...DEFTYPES]};
   }
   if(!s.subtypes){
     s.subtypes=JSON.parse(JSON.stringify(DEFSUBS));
@@ -108,18 +104,30 @@ function load(){
     });
     s.v=3;
   }
+  if((s.v||1)<4){
+    Object.values(s.items).forEach(it=>{
+      if(it.npc===undefined){it.npc=it.value>0?it.value:null;it.cm=null}
+      delete it.value;
+    });
+    s.v=4;
+  }
+  s.basis=s.basis||'best';
   s.market=s.market||[];s.manual=s.manual||[];delete s.storage;s.tax=s.tax??35;
   if(s.trashValue)Object.values(s.items).forEach(i=>{if(i.trash&&!i.value)i.value=s.trashValue});
   delete s.trashValue;
   Object.values(s.items).forEach(i=>{if(i.trash===undefined)i.trash=/trash/i.test(i.name)});
   return s;
 }
-let S=load(),tab='session',stage={},mon=local(Date.now()).slice(0,7),ft='',fs='',cf='',msrc='Other',stageS={},lmode='bag',msent=true,pend=null,pendBase={};
+let S=load(),tab='session',stage={},mon=local(Date.now()).slice(0,7),ft='',fs='',cf='',msrc='Other',stageS={},lmode='bag',msent=true,pend=null,pendBase={},rf='',rt='';
 function save(){try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}}
 
 const ic=it=>/^(https?:|\.{0,2}\/)|\.(png|jpe?g|webp|svg|gif)$/i.test(it.icon||'')?`<img src="${esc(it.icon)}" alt="">`:esc(it.icon||'📦');
 const cur=()=>S.sessions.find(s=>s.id===S.active);
-const val=i=>S.items[i]?S.items[i].value:0;
+const val=i=>{
+  const it=S.items[i];if(!it)return 0;
+  const n=it.npc==null?0:it.npc,c=it.cm==null?0:it.cm*(1-S.tax/100);
+  return S.basis==='npc'?n:S.basis==='cm'?c:Math.max(n,c);
+};
 const tname=s=>s.type+(s.sub?' · '+s.sub:'');
 const sTotals=s=>{const t={};s.yields.forEach(y=>{for(const[i,q]of Object.entries(y.items))t[i]=(t[i]||0)+q});return t};
 const sSilver=s=>Object.entries(sTotals(s)).reduce((a,[i,q])=>a+q*val(i),0);
@@ -138,10 +146,25 @@ function pick(id,v){$('#'+id).value=v;$('#sg_'+id).innerHTML=''}
 function getItem(name,icon){
   name=name.trim();
   let id=Object.keys(S.items).find(i=>S.items[i].name.toLowerCase()===name.toLowerCase());
-  if(!id){id=uid();S.items[id]={name,icon:icon||'📦',value:0,trash:/trash/i.test(name)}}
+  if(!id){id=uid();S.items[id]={name,icon:icon||'📦',npc:null,cm:null,trash:/trash/i.test(name)}}
   return id;
 }
-const inMonth=ms=>local(ms).slice(0,7)===mon;
+const inPeriod=ms=>{
+  if(rf||rt){const f=rf?new Date(rf).getTime():-Infinity,t=rt?new Date(rt).getTime():Infinity;return ms>=f&&ms<=t}
+  return local(ms).slice(0,7)===mon;
+};
+const sfx=()=>S.basis==='npc'?'':' (after CM tax)';
+const basisLabel=()=>S.basis==='npc'?'NPC prices (no tax)':S.basis==='cm'?`CM prices after ${S.tax}% tax`:`the higher of the NPC price or the CM price after ${S.tax}% tax`;
+function periodUI(withBasis){
+  const on=rf||rt;
+  return `<input type="month" value="${mon}" onchange="mon=this.value;rf='';rt='';render()" ${on?'style="opacity:.5"':''} aria-label="Month">
+  <label class="mut">From</label><input type="datetime-local" value="${rf}" onchange="rf=this.value;render()" aria-label="From">
+  <label class="mut">To</label><input type="datetime-local" value="${rt}" onchange="rt=this.value;render()" aria-label="To">
+  ${on?'<button onclick="rf=\'\';rt=\'\';render()">Clear range</button>':''}
+  ${withBasis?`<label class="mut">Value as</label><select onchange="S.basis=this.value;save();render()" aria-label="Value basis">
+  <option value="best" ${S.basis==='best'?'selected':''}>Best of NPC / CM (after CM tax)</option><option value="npc" ${S.basis==='npc'?'selected':''}>NPC price</option>
+  <option value="cm" ${S.basis==='cm'?'selected':''}>CM price (after tax)</option></select>`:''}`;
+}
 
 /* ---------- Session actions ---------- */
 function setSubs(){
@@ -225,12 +248,12 @@ function collected(){
   const r={};
   const o=i=>r[i]=r[i]||{tot:0,sent:0,src:{}};
   S.sessions.forEach(x=>x.yields.forEach(y=>{
-    if(!inMonth(y.t)||(cf&&x.type!==cf))return;
+    if(!inPeriod(y.t)||(cf&&x.type!==cf))return;
     for(const[i,q]of Object.entries(y.items)){if(!q)continue;const e=o(i);e.tot+=q;e.src[tname(x)]=(e.src[tname(x)]||0)+q}
     for(const[i,q]of Object.entries(y.sent||{}))o(i).sent+=q;
   }));
   S.manual.forEach(m=>{
-    if(!inMonth(m.t)||(cf&&m.source!==cf))return;
+    if(!inPeriod(m.t)||(cf&&m.source!==cf))return;
     const e=o(m.item),k=m.source+' · by hand';
     e.tot+=m.qty;e.sent+=m.sent??m.qty;e.src[k]=(e.src[k]||0)+m.qty;
   });
@@ -261,7 +284,7 @@ function delMarket(mid){
   S.market=S.market.filter(x=>x.id!==mid);save();render();
 }
 function mStats(){
-  const mk=S.market.filter(m=>inMonth(m.t));let gross=0,tax=0,spent=0;
+  const mk=S.market.filter(m=>inPeriod(m.t));let gross=0,tax=0,spent=0;
   mk.forEach(m=>{if(m.kind==='sell'){gross+=m.qty*m.price;tax+=m.qty*m.price*m.tax/100}else spent+=m.qty*m.price});
   return{mk,gross,tax,spent,net:gross-tax-spent};
 }
@@ -341,18 +364,19 @@ function vSession(){
   <button onclick="addZoneTrash()">Add zone trash</button></div></div>
   <div class="card"><h2>Checkpoints</h2>
   ${s.yields.length?`<div class="table-wrap"><table><tr><th>Time</th><th>Since last</th><th>New</th><th>To storage</th><th>Silver</th><th>Silver/hr</th><th></th></tr>${rows}</table></div>`:'<p class="mut">No logs yet.</p>'}
-  <p class="mut">Silver so far: ${fmt(sSilver(s))}</p>
+  <p class="mut">Silver so far${sfx()}: ${fmt(sSilver(s))}</p>
   <p class="mut">Per 30 minutes on average: ${Object.entries(tot).filter(([,q])=>q>0).map(([i,q])=>`${ic(S.items[i])} ${(q/h/2).toFixed(1)}`).join(' &nbsp; ')||'–'}</p></div>`+history();
 }
 function vCollected(){
   const r=collected(),ids=Object.keys(r).sort((a,b)=>r[b].tot-r[a].tot);
   const tv=ids.reduce((a,i)=>a+r[i].tot*val(i),0),sv=ids.reduce((a,i)=>a+r[i].sent*val(i),0);
-  const man=S.manual.filter(m=>inMonth(m.t)).sort((a,b)=>b.t-a.t);
+  const man=S.manual.filter(m=>inPeriod(m.t)).sort((a,b)=>b.t-a.t);
   const typeOpts=sel=>S.types.map(x=>`<option ${x===sel?'selected':''}>${esc(x)}</option>`).join('');
-  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Collected</h2><input type="month" value="${mon}" onchange="mon=this.value;render()">
+  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Collected</h2>${periodUI(true)}
   <select onchange="cf=this.value;render()" aria-label="Filter by source"><option value="">All sources</option>${typeOpts(cf)}</select></div>
-  <div class="stats"><div class="stat key"><b>${fmt(tv)}</b>Silver value collected</div><div class="stat"><b>${fmt(sv)}</b>Silver value sent to storage</div>
+  <div class="stats"><div class="stat key"><b>${fmt(tv)}</b>Silver value collected${sfx()}</div><div class="stat"><b>${fmt(sv)}</b>Silver value sent to storage${sfx()}</div>
   <div class="stat"><b>${ids.length}</b>Different items</div></div>
+  <p class="mut">Silver values use ${basisLabel()}. NPC sales aren't taxed; only Central Market sales are.</p>
   <div class="card"><h2>Add by hand</h2>
   <div class="row"><input id="sn" placeholder="Item" class="grow" autocomplete="off" onfocus="sug('sn','item')" oninput="sug('sn','item')"><div class="sug" id="sg_sn"></div>
   <input id="sic" class="sm" placeholder="🙂" aria-label="Icon for new item"><input id="sq" type="number" placeholder="Qty">
@@ -374,7 +398,7 @@ function vCollected(){
 }
 function vMarket(){
   const m=mStats(),rows=[...m.mk].sort((a,b)=>b.t-a.t);
-  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Central market</h2><input type="month" value="${mon}" onchange="mon=this.value;render()"></div>
+  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Central market</h2>${periodUI(false)}</div>
   <div class="stats"><div class="stat"><b>${fmt(m.gross)}</b>Gross sales</div><div class="stat"><b>${fmt(m.tax)}</b>Tax paid</div>
   <div class="stat"><b>${fmt(m.gross-m.tax)}</b>Net sales</div><div class="stat"><b>${fmt(m.spent)}</b>Spent buying</div>
   <div class="stat key"><b class="${m.net<0?'neg':''}">${fmt(m.net)}</b>Net profit</div></div>
@@ -394,24 +418,25 @@ function vMarket(){
   </table></div></div>`;
 }
 function vAnalytics(){
-  const ss=S.sessions.filter(s=>inMonth(s.start)&&(!ft||s.type===ft)&&(!fs||s.sub===fs));
+  const ss=S.sessions.filter(s=>inPeriod(s.start)&&(!ft||s.type===ft)&&(!fs||s.sub===fs));
   const H=ss.reduce((a,s)=>a+sHours(s),0),V=ss.reduce((a,s)=>a+sSilver(s),0),rate=H?V/H:0;
   window._rate=rate;
   const agg=kf=>{const m={};ss.forEach(s=>{const k=kf(s);m[k]=m[k]||{n:0,h:0,v:0};m[k].n++;m[k].h+=sHours(s);m[k].v+=sSilver(s)});return m};
   const tbl=(m,lab,nm)=>`<div class="table-wrap"><table><tr><th>${lab}</th><th>Sessions</th><th>Hours</th><th>Silver</th><th>Silver/hr</th></tr>
   ${Object.entries(m).map(([k,x])=>`<tr><td>${esc(nm(k))}</td><td>${x.n}</td><td>${x.h.toFixed(1)}</td><td>${fmt(x.v)}</td><td>${fmt(x.h?x.v/x.h:0)}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No sessions match.</td></tr>'}</table></div>`;
   const t={};ss.forEach(s=>{const x=sTotals(s);for(const i in x)t[i]=(t[i]||0)+x[i]});
-  const rows=Object.keys(S.items).filter(i=>!S.items[i].trash).map(i=>({k:i,q:t[i]||0,v:(t[i]||0)*S.items[i].value}));
+  const rows=Object.keys(S.items).filter(i=>!S.items[i].trash).map(i=>({k:i,q:t[i]||0,v:(t[i]||0)*val(i)}));
   const tids=Object.keys(S.items).filter(i=>S.items[i].trash);
-  rows.push({k:'_trash',q:tids.reduce((a,i)=>a+(t[i]||0),0),v:tids.reduce((a,i)=>a+(t[i]||0)*S.items[i].value,0)});
+  rows.push({k:'_trash',q:tids.reduce((a,i)=>a+(t[i]||0),0),v:tids.reduce((a,i)=>a+(t[i]||0)*val(i),0)});
   const shown=rows.filter(r=>r.q>0).sort((a,b)=>b.v-a.v||b.q-a.q);
   const m=mStats(),subs=S.subtypes[ft]||[];
-  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Analytics</h2><input type="month" value="${mon}" onchange="mon=this.value;render()">
+  return `<div class="row" style="margin:0 0 12px"><h2 style="margin:0">Analytics</h2>${periodUI(true)}
   <select onchange="ft=this.value;fs='';render()" aria-label="Filter by type"><option value="">All types</option>${S.types.map(x=>`<option ${x===ft?'selected':''}>${esc(x)}</option>`).join('')}</select>
   ${subs.length?`<select onchange="fs=this.value;render()" aria-label="Filter by sub-type"><option value="">All ${esc(ft)}</option>${subs.map(x=>`<option ${x===fs?'selected':''}>${esc(x)}</option>`).join('')}</select>`:''}</div>
-  <div class="stats"><div class="stat key"><b>${fmt(rate)}</b>Avg silver per hour</div>
-  <div class="stat"><b>${fmt(V)}</b>Total silver</div><div class="stat"><b>${H.toFixed(1)}h</b>Hours played</div>
+  <div class="stats"><div class="stat key"><b>${fmt(rate)}</b>Avg silver per hour${sfx()}</div>
+  <div class="stat"><b>${fmt(V)}</b>Total silver${sfx()}</div><div class="stat"><b>${H.toFixed(1)}h</b>Hours played</div>
   <div class="stat"><b>${ss.length}</b>Sessions</div></div>
+  <p class="mut">Silver values use ${basisLabel()}. NPC sales aren't taxed; only Central Market sales are.</p>
   <div class="card"><h2>What if</h2><div class="row"><label>Target silver</label><input id="tg" type="number" oninput="calc()" style="width:130px">
   <span id="o1" class="mut">enter a number</span></div>
   <div class="row"><label>Hours played</label><input id="hr" type="number" oninput="calc()" style="width:130px">
@@ -445,21 +470,23 @@ function vData(){
   <div style="width:100%">${(S.subtypes[t]||[]).map((x,j)=>`<span class="chip">${esc(x)}<button onclick="delSub(${k},${j})" aria-label="Remove ${esc(x)}">✕</button></span>`).join('')}
   <span class="row" style="display:inline-flex;margin:0"><input id="sub${k}" placeholder="New sub-type" style="width:150px"><button onclick="addSub(${k})">Add</button></span></div></div>`).join('')}
   <div class="row"><input id="nt" placeholder="New type" class="grow"><button class="pri" onclick="addType()">Add type</button></div></div>
-  <div class="card"><h2>Items and values</h2><p class="mut">Value is the silver for one unit. Tick Trash for trash items; give each zone's trash its own name and value. Icon can be an emoji or an image path like icons/wood.png.</p>
+  <div class="card"><h2>Items and values</h2><p class="mut">NPC value and CM (central market) value are the silver for one unit. Leave one empty for N/A if it can't be sold that way, or both if it can't be sold at all. Tick Trash for trash items; give each zone's trash its own name and value. Icon can be an emoji or an image path like icons/wood.png.</p>
   <div class="irow"><div class="row" style="margin:0;flex-wrap:nowrap"><input id="dic" placeholder="🙂" aria-label="Icon" style="flex:none;width:64px;text-align:center">
   <input id="dn" placeholder="New item name" aria-label="Name" style="flex:1 1 0;min-width:0"></div>
-  <div class="row"><input id="dv" type="number" min="0" placeholder="Value" aria-label="Value" style="width:110px">
+  <div class="row"><input id="dnp" type="number" min="0" placeholder="NPC value" aria-label="NPC value" style="width:110px"><input id="dcm" type="number" min="0" placeholder="CM value" aria-label="CM value" style="width:110px">
   <label><input type="checkbox" id="dt"> Trash</label><button class="pri" onclick="addDataItem()">Add item</button></div></div>
   ${Object.entries(S.items).map(([i,it])=>`<div class="irow"><div class="row" style="margin:0;flex-wrap:nowrap">
   <input value="${esc(it.icon)}" onchange="S.items['${i}'].icon=this.value;save()" aria-label="Icon" style="flex:none;width:64px;text-align:center">
   <input value="${esc(it.name)}" onchange="S.items['${i}'].name=this.value;save()" aria-label="Name" style="flex:1 1 0;min-width:0"></div>
-  <div class="row"><input type="number" min="0" style="width:110px" value="${it.value}" onchange="S.items['${i}'].value=+this.value||0;save()" aria-label="Value">
+  <div class="row"><input type="number" min="0" style="width:110px" placeholder="NPC value" value="${it.npc??''}" onchange="S.items['${i}'].npc=this.value===''?null:+this.value;save()" aria-label="NPC value">
+  <input type="number" min="0" style="width:110px" placeholder="CM value" value="${it.cm??''}" onchange="S.items['${i}'].cm=this.value===''?null:+this.value;save()" aria-label="CM value">
   <label><input type="checkbox" ${it.trash?'checked':''} onchange="S.items['${i}'].trash=this.checked;save()"> Trash</label></div></div>`).join('')}</div>`;
 }
 function addDataItem(){
   const n=$('#dn').value.trim();if(!n)return;
   const id=getItem(n,$('#dic').value.trim());
-  S.items[id].value=+$('#dv').value||0;
+  S.items[id].npc=$('#dnp').value===''?null:+$('#dnp').value;
+  S.items[id].cm=$('#dcm').value===''?null:+$('#dcm').value;
   if($('#dt').checked)S.items[id].trash=true;
   save();render();
 }
